@@ -76,8 +76,7 @@ unsigned char winUsbDriver::usbInit(unsigned long VIDin, unsigned long PIDin)
 	LstK_Free(deviceList);
 	if (deviceInfo == NULL)
 	{
-		// I nitpicked this formatting so the compiler wont whine about the qDebug format
-		// type mismatch
+		
 		qDebug() << "Could not find device VID = " << QString::number(VIDin, 16)
 		         << ", PID = " << QString::number(PIDin, 16);
 		return 2;
@@ -88,8 +87,7 @@ unsigned char winUsbDriver::usbInit(unsigned long VIDin, unsigned long PIDin)
 	if (!success)
 	{
 		ec = GetLastError();
-		// I nitpicked this formatting so the compiler wont whine about the qDebug format
-		// type mismatch
+		
 		qDebug() << "UsbK_Init failed. ErrorCode: " << QString::number(ec, 16);
 		return 3;
 	}

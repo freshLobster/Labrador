@@ -26,10 +26,11 @@ private:
     //USB Vars
     KUSB_HANDLE handle = NULL;
     //USBIso Vars
+    KOVL_POOL_HANDLE ovlPool;
     PKISO_CONTEXT isoCtx[NUM_ISO_ENDPOINTS][NUM_FUTURE_CTX];
     KOVL_HANDLE ovlkHandle[NUM_ISO_ENDPOINTS][NUM_FUTURE_CTX];
-    KOVL_POOL_HANDLE ovlPool;
-    unsigned char dataBuffer[NUM_ISO_ENDPOINTS][NUM_FUTURE_CTX][ISO_PACKET_SIZE*ISO_PACKETS_PER_CTX];
+    
+    
     //Generic Functions
     unsigned char usbInit(unsigned long VIDin, unsigned long PIDin);
     int usbIsoInit(void);
@@ -37,8 +38,10 @@ private:
     bool allEndpointsComplete(int n);
     bool shutdownRequested = false;
     bool shutdownCompleteSent = false;
-    bool transferPending[NUM_ISO_ENDPOINTS][NUM_FUTURE_CTX] = {};
-    QElapsedTimer shutdownElapsed;
+    //bool transferPending[NUM_ISO_ENDPOINTS][NUM_FUTURE_CTX] = {};
+    //QElapsedTimer shutdownElapsed;
+    
+    unsigned char dataBuffer[NUM_ISO_ENDPOINTS][NUM_FUTURE_CTX][ISO_PACKET_SIZE*ISO_PACKETS_PER_CTX];
 
 signals:
     void shutdownComplete();
