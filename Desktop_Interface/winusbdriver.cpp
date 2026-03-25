@@ -1,566 +1,805 @@
 #include "winusbdriver.h"
 #include <QApplication>
 #include <QElapsedTimer>
-#include <qprocess.h>
 #include <QMessageBox>
+#include <qprocess.h>
 
 #define SLEEP_DIVIDER 16
 
-winUsbDriver::winUsbDriver(QWidget *parent) : genericUsbDriver(parent)
+// #define WINUSB_PHASE_DIAGNOSTICS
+
+#ifndef WINUSB_PHASE_RESYNC_STREAK
+#define WINUSB_PHASE_RESYNC_STREAK 2
+#endif
+
+winUsbDriver::winUsbDriver(QWidget* parent)
+    : genericUsbDriver(parent)
 {
 }
 
-winUsbDriver::~winUsbDriver(void){
+winUsbDriver::~winUsbDriver(void)
+{
 
-    //Like any decent destructor, this just frees resources
+	// Like any decent destructor, this just frees resources
 
-    qDebug() << "\n\nwinUsbDriver destructor ran!";
-    for (unsigned char k=0; k<NUM_ISO_ENDPOINTS; k++){
-        for(int n=0;n<NUM_FUTURE_CTX;n++){
-            IsoK_Free(isoCtx[k][n]);
-        }
-        for(int i=0;i<NUM_FUTURE_CTX;i++){
-            OvlK_Release(ovlkHandle[k][i]);
-        }
-        UsbK_FlushPipe(handle, pipeID[k]);
-        UsbK_AbortPipe(handle, pipeID[k]);
-    }
-    OvlK_Free(ovlPool);
-    free(outBuffers[0]);
-    free(outBuffers[1]);
-    UsbK_Free(handle);
+	qDebug() << "\n\nwinUsbDriver destructor ran!";
+	for (unsigned char k = 0; k < NUM_ISO_ENDPOINTS; k++)
+	{
+		for (int n = 0; n < NUM_FUTURE_CTX; n++)
+		{
+			IsoK_Free(isoCtx[k][n]);
+		}
+		for (int i = 0; i < NUM_FUTURE_CTX; i++)
+		{
+			OvlK_Release(ovlkHandle[k][i]);
+		}
+		UsbK_FlushPipe(handle, pipeID[k]);
+		UsbK_AbortPipe(handle, pipeID[k]);
+	}
+	OvlK_Free(ovlPool);
+	free(outBuffers[0]);
+	free(outBuffers[1]);
+	UsbK_Free(handle);
 }
 
-unsigned char winUsbDriver::usbInit(unsigned long VIDin, unsigned long PIDin){
+unsigned char winUsbDriver::usbInit(unsigned long VIDin, unsigned long PIDin)
+{
 
-    //This function gets you a USB handle, as well as any other data needed to send a control transfer over USB.
-    //You should be able to call usbSendControl() immediately after this function has returned success!!
+	// This function gets you a USB handle, as well as any other data needed to send a
+	// control transfer over USB. You should be able to call usbSendControl() immediately
+	// after this function has returned success!!
 
-    unsigned char success;
-    KLST_DEVINFO_HANDLE deviceInfo = NULL;
-    DWORD ec = ERROR_SUCCESS;
-    KLST_HANDLE deviceList = NULL;
+	unsigned char success;
+	KLST_DEVINFO_HANDLE deviceInfo = NULL;
+	DWORD ec = ERROR_SUCCESS;
+	KLST_HANDLE deviceList = NULL;
 
-    //List libusbk devices connected
-    if (!LstK_Init(&deviceList, (KLST_FLAG) 0))	{
-        qDebug("Error initializing device list");
-        return 1;
-    } //else qDebug() << "Device List initialised!";
+	// List libusbk devices connected
+	if (!LstK_Init(&deviceList, (KLST_FLAG)0))
+	{
+		qDebug("Error initializing device list");
+		return 1;
+	} // else qDebug() << "Device List initialised!";
 
-    /*
-    UINT deviceCount = 0;
-    LstK_Count(deviceList, &deviceCount);
-    if (!deviceCount) {
-        qDebug("Device list empty");
-        LstK_Free(deviceList);	// If LstK_Init returns TRUE, the list must be freed.
-        return 0;
-    } //else qDebug() << "Device Count initialised!";
+	/*
+	UINT deviceCount = 0;
+	LstK_Count(deviceList, &deviceCount);
+	if (!deviceCount) {
+	    qDebug("Device list empty");
+	    LstK_Free(deviceList);	// If LstK_Init returns TRUE, the list must be freed.
+	    return 0;
+	} //else qDebug() << "Device Count initialised!";
 */
 
-    //Look for Labrador!
-    LstK_FindByVidPid(deviceList, VIDin, PIDin, &deviceInfo);
-    LstK_Free(deviceList);
-    if (deviceInfo == NULL){
-        //I nitpicked this formatting so the compiler wont whine about the qDebug format type mismatch
-        qDebug() << "Could not find device VID = " << QString::number(VIDin, 16) << ", PID = " << QString::number(PIDin, 16);
-        return 2;
-    }
+	// Look for Labrador!
+	LstK_FindByVidPid(deviceList, VIDin, PIDin, &deviceInfo);
+	LstK_Free(deviceList);
+	if (deviceInfo == NULL)
+	{
+		// I nitpicked this formatting so the compiler wont whine about the qDebug format
+		// type mismatch
+		qDebug() << "Could not find device VID = " << QString::number(VIDin, 16)
+		         << ", PID = " << QString::number(PIDin, 16);
+		return 2;
+	}
 
-    //Open Labrador!!
-    success = UsbK_Init(&handle, deviceInfo);
-    if (!success){
-        ec = GetLastError();
-        //I nitpicked this formatting so the compiler wont whine about the qDebug format type mismatch
-        qDebug() << "UsbK_Init failed. ErrorCode: " << QString::number(ec, 16);
-        return 3;
-    } else qDebug() << "Device opened successfully!";
+	// Open Labrador!!
+	success = UsbK_Init(&handle, deviceInfo);
+	if (!success)
+	{
+		ec = GetLastError();
+		// I nitpicked this formatting so the compiler wont whine about the qDebug format
+		// type mismatch
+		qDebug() << "UsbK_Init failed. ErrorCode: " << QString::number(ec, 16);
+		return 3;
+	}
+	else
+		qDebug() << "Device opened successfully!";
 
-    if (handle == NULL){
-        return 4; //Unkown error, only exists on 32 bit???
-    }
+	if (handle == NULL)
+	{
+		return 4; // Unkown error, only exists on 32 bit???
+	}
 
-    return 0;
+	return 0;
 }
 
-void winUsbDriver::usbSendControl(uint8_t RequestType, uint8_t Request, uint16_t Value, uint16_t Index, uint16_t Length, unsigned char *LDATA){
+void winUsbDriver::usbSendControl(uint8_t RequestType, uint8_t Request, uint16_t Value,
+    uint16_t Index, uint16_t Length, unsigned char* LDATA)
+{
 
-    //This function sends a control transfer over USB.
-    //LDATA is a pointer to the buffer that is going to be sent to the device.  If no buffer is to be sent, LDATA should be NULL (and any implementation should be able to handle this case!!).
-    //The Linux implementation of this is trivially simple.  Have a look!
+	// This function sends a control transfer over USB.
+	// LDATA is a pointer to the buffer that is going to be sent to the device.  If no buffer
+	// is to be sent, LDATA should be NULL (and any implementation should be able to handle
+	// this case!!). The Linux implementation of this is trivially simple.  Have a look!
 
-    //////////////////////////////////////////////////////////////////////////////////////////
-    //IF YOU'RE SEEING AN ERROR, CHECK THAT REQUESTTYPE AND REQUEST ARE FORMATTED AS HEX
-    //////////////////////////////////////////////////////////////////////////////////////////
+	//////////////////////////////////////////////////////////////////////////////////////////
+	// IF YOU'RE SEEING AN ERROR, CHECK THAT REQUESTTYPE AND REQUEST ARE FORMATTED AS HEX
+	//////////////////////////////////////////////////////////////////////////////////////////
 
-    WINUSB_SETUP_PACKET setupPacket;
-    unsigned char controlSuccess;
-    UINT bytesTransferred = 0;
-    unsigned char *controlBuffer;
-    DWORD errorCode = ERROR_SUCCESS;
+	WINUSB_SETUP_PACKET setupPacket;
+	unsigned char controlSuccess;
+	UINT bytesTransferred = 0;
+	unsigned char* controlBuffer;
+	DWORD errorCode = ERROR_SUCCESS;
 
-    if(!connected){
-        qDebug() << "Not connected.  Ignoring Control Request!!!";
-    }
-    //Error checking
-    if (handle==NULL){
-        qDebug("Null handle error in usbSendControl");
-        return;
-    }
+	if (!connected)
+	{
+		qDebug() << "Not connected.  Ignoring Control Request!!!";
+	}
+	// Error checking
+	if (handle == NULL)
+	{
+		qDebug("Null handle error in usbSendControl");
+		return;
+	}
 
-    //Fill the setup packet
-    setupPacket.RequestType = RequestType;
-    setupPacket.Request = Request;
-    setupPacket.Value = Value;
-    setupPacket.Index = Index;
-    setupPacket.Length = Length;
+	// Fill the setup packet
+	setupPacket.RequestType = RequestType;
+	setupPacket.Request = Request;
+	setupPacket.Value = Value;
+	setupPacket.Index = Index;
+	setupPacket.Length = Length;
 
-    //Check for case of null LDATA
-    if (LDATA==NULL){
-        controlBuffer = inBuffer;
-    }
-    else controlBuffer = LDATA;
+	// Check for case of null LDATA
+	if (LDATA == NULL)
+	{
+		controlBuffer = inBuffer;
+	}
+	else
+		controlBuffer = LDATA;
 
-    //Send the packet
-    controlSuccess = UsbK_ControlTransfer(handle, setupPacket, controlBuffer, setupPacket.Length, &bytesTransferred, NULL);
-    if (controlSuccess) {
-        qDebug("%d BYTES TRANSFERRED", bytesTransferred);
-    }
-    else{
-        errorCode = GetLastError();
-        qDebug() << "UsbK_ControlTransfer failed with error code" << errorCode;
-        if(errorCode == 170){ //Device not connected?? (According to test)
-            killMe();
-        }
-    }
+	// Send the packet
+	controlSuccess = UsbK_ControlTransfer(
+	    handle, setupPacket, controlBuffer, setupPacket.Length, &bytesTransferred, NULL);
+	if (controlSuccess)
+	{
+		qDebug("%d BYTES TRANSFERRED", bytesTransferred);
+	}
+	else
+	{
+		errorCode = GetLastError();
+		qDebug() << "UsbK_ControlTransfer failed with error code" << errorCode;
+		if (errorCode == 170)
+		{ // Device not connected?? (According to test)
+			killMe();
+		}
+	}
 }
 
-int  winUsbDriver::usbIsoInit(void){
-    //Iso is slightly less easy than plain old USB.
-    //You must set up NUM_FUTURE_CTX iso transfers, with each transfer containing ISO_PACKETS_PER_CTX isochronous packets.
-    //These transactions are numbered by n = 0,1,2,3...NUM_FUTURE_CTX-1.  Transfer n should read data into dataBuffer[n].
+int winUsbDriver::usbIsoInit(void)
+{
+	// Iso is slightly less easy than plain old USB.
+	// You must set up NUM_FUTURE_CTX iso transfers, with each transfer containing
+	// ISO_PACKETS_PER_CTX isochronous packets. These transactions are numbered by n =
+	// 0,1,2,3...NUM_FUTURE_CTX-1.  Transfer n should read data into dataBuffer[n].
 
-    //Do note that current implementations don't support changing FPS at runtime.  Some changes will need to be made to enable this (perhaps taking NUM_FUTURE_CTX and ISO_PACKETS_PER_CTX as inputs that the user can change??)
+	// Do note that current implementations don't support changing FPS at runtime.  Some
+	// changes will need to be made to enable this (perhaps taking NUM_FUTURE_CTX and
+	// ISO_PACKETS_PER_CTX as inputs that the user can change??)
 
+	int n;
+	bool success;
+	DWORD errorCode = ERROR_SUCCESS;
 
-    int n;
-    bool success;
-    DWORD errorCode = ERROR_SUCCESS;
+	// Setting up overlapped I/O.  It's easier than threading on Windows.
+	success = OvlK_Init(&ovlPool, handle, MAX_OVERLAP, (KOVL_POOL_FLAG)0);
+	if (!success)
+	{
+		errorCode = GetLastError();
+		qDebug() << "OvlK_Init failed with error code" << errorCode;
+		return -1;
+	}
+	for (unsigned char k = 0; k < NUM_ISO_ENDPOINTS; k++)
+	{
+		success = UsbK_ResetPipe(handle, pipeID[k]);
+		if (!success)
+		{
+			errorCode = GetLastError();
+			qDebug() << "UsbK_ResetPipe failed with error code" << errorCode;
+			return -2;
+		}
+	}
 
-    //Setting up overlapped I/O.  It's easier than threading on Windows.
-    success = OvlK_Init(&ovlPool, handle, MAX_OVERLAP, (KOVL_POOL_FLAG) 0);
-    if(!success){
-        errorCode = GetLastError();
-        qDebug() << "OvlK_Init failed with error code" << errorCode;
-        return -1;
-    }
-    for (unsigned char k=0;k<NUM_ISO_ENDPOINTS;k++){
-        success = UsbK_ResetPipe(handle, pipeID[k]);
-        if(!success){
-            errorCode = GetLastError();
-            qDebug() << "UsbK_ResetPipe failed with error code" << errorCode;
-            return -2;
-        }
-    }
+	// Filling the transfer contexts
+	for (n = 0; n < NUM_FUTURE_CTX; n++)
+	{
+		for (unsigned char k = 0; k < NUM_ISO_ENDPOINTS; k++)
+		{
+			// if(n%2){
+			//     QThread::msleep(1); //Wait for next tick after sending two frames.
+			//     Still possibility of failure during 100% CPU condition, but risk
+			//     greatly mitigated.
+			// }
+			success = IsoK_Init(&isoCtx[k][n], ISO_PACKETS_PER_CTX, 0);
+			if (!success)
+			{
+				errorCode = GetLastError();
+				qDebug() << "IsoK_Init failed with error code" << errorCode;
+				qDebug() << "n =" << n;
+				return -3;
+			}
 
-    //Filling the transfer contexts
-    for(n=0;n<NUM_FUTURE_CTX;n++){
-        for (unsigned char k=0;k<NUM_ISO_ENDPOINTS;k++){
-            //if(n%2){
-            //    QThread::msleep(1); //Wait for next tick after sending two frames.  Still possibility of failure during 100% CPU condition, but risk greatly mitigated.
-            //}
-            success = IsoK_Init(&isoCtx[k][n], ISO_PACKETS_PER_CTX, 0);
-            if(!success){
-                errorCode = GetLastError();
-                qDebug() << "IsoK_Init failed with error code" << errorCode;
-                qDebug() << "n =" << n;
-                return -3;
-            }
+			success = IsoK_SetPackets(isoCtx[k][n], ISO_PACKET_SIZE);
+			if (!success)
+			{
+				errorCode = GetLastError();
+				qDebug() << "IsoK_SetPackets failed with error code" << errorCode;
+				qDebug() << "n =" << n;
+				return -4;
+			}
 
-            success = IsoK_SetPackets(isoCtx[k][n], ISO_PACKET_SIZE);
-            if(!success){
-                errorCode = GetLastError();
-                qDebug() << "IsoK_SetPackets failed with error code" << errorCode;
-                qDebug() << "n =" << n;
-                return -4;
-            }
+			success = OvlK_Acquire(&ovlkHandle[k][n], ovlPool);
+			if (!success)
+			{
+				errorCode = GetLastError();
+				qDebug() << "OvlK_Acquire failed with error code" << errorCode;
+				qDebug() << "n =" << n;
+				return -5;
+			}
 
-            success = OvlK_Acquire(&ovlkHandle[k][n], ovlPool);
-            if(!success){
-                errorCode = GetLastError();
-                qDebug() << "OvlK_Acquire failed with error code" << errorCode;
-                qDebug() << "n =" << n;
-                return -5;
-            }
+			// Sending the transfer requests
+			success = UsbK_IsoReadPipe(handle, pipeID[k], dataBuffer[k][n],
+			    sizeof(dataBuffer[k][n]), (LPOVERLAPPED)ovlkHandle[k][n], isoCtx[k][n]);
+			// qDebug() << "sizeof(dataBuffer[k][n]) = " << sizeof(dataBuffer[k][n]);
+		}
+	}
 
-            //Sending the transfer requests
-            success = UsbK_IsoReadPipe(handle, pipeID[k], dataBuffer[k][n], sizeof(dataBuffer[k][n]), (LPOVERLAPPED) ovlkHandle[k][n], isoCtx[k][n]);
-            //qDebug() << "sizeof(dataBuffer[k][n]) = " << sizeof(dataBuffer[k][n]);
-        }
-    }
+	// Setting up isoTimer.  This will call isoTimerTick every ISO_TIMER_PERIOD milliseconds.
+	isoTimer = new QTimer();
+	isoTimer->setTimerType(Qt::PreciseTimer);
+	isoTimer->start(ISO_TIMER_PERIOD);
+	connect(isoTimer, SIGNAL(timeout()), this, SLOT(isoTimerTick()));
 
-    //Setting up isoTimer.  This will call isoTimerTick every ISO_TIMER_PERIOD milliseconds.
-    isoTimer = new QTimer();
-    isoTimer->setTimerType(Qt::PreciseTimer);
-    isoTimer->start(ISO_TIMER_PERIOD);
-    connect(isoTimer, SIGNAL(timeout()), this, SLOT(isoTimerTick()));
-
-    qDebug() << "Setup successful!";
-    return 0;
+	qDebug() << "Setup successful!";
+	return 0;
 }
 
-void winUsbDriver::isoTimerTick(void){
-    //This function is called every ISO_TIMER_PERIOD milliseconds, after usbIsoInit() has run.
-    //It should check if a transfer is complete, then copy the ___earliest___ transfer into the appropriate outBuffer, as well as set appropriate bufferLengths.
-    //Once this is complete, it should resubmit the transfer that it read the data from.
-    //Finally, it should signal upTick() so that isoDriver knows it can draw a new frame.
+void winUsbDriver::isoTimerTick(void)
+{
+	// This function is called every ISO_TIMER_PERIOD milliseconds, after usbIsoInit() has
+	// run. It should check if a transfer is complete, then copy the ___earliest___
+	// transfer into the appropriate outBuffer, as well as set appropriate bufferLengths.
+	// Once this is complete, it should resubmit the transfer that it read the data from.
+	// Finally, it should signal upTick() so that isoDriver knows it can draw a new frame.
 
-    timerCount++;
+	timerCount++;
 
-    if(shutdownRequested){
-        return;
-    }
+	if (shutdownRequested)
+	{
+		return;
+	}
 
-    char subString[3] = "th";
-    if(timerCount%10 == 1) strcpy(subString, "st");
-    if(timerCount%10 == 2) strcpy(subString, "nd");
-    if(timerCount%10 == 3) strcpy(subString, "rd");
-    if((timerCount<20) && (timerCount > 10)) strcpy(subString, "th");
+	char subString[3] = "th";
+	if (timerCount % 10 == 1)
+		strcpy(subString, "st");
+	if (timerCount % 10 == 2)
+		strcpy(subString, "nd");
+	if (timerCount % 10 == 3)
+		strcpy(subString, "rd");
+	if ((timerCount < 20) && (timerCount > 10))
+		strcpy(subString, "th");
 
-    //qDebug("\n\nThis is the %d%s Tick!", timerCount, subString);
+	// qDebug("\n\nThis is the %d%s Tick!", timerCount, subString);
 
-    bool success;
-    int n, earliest = MAX_OVERLAP;
-    unsigned int minFrame = 4294967295;
-    unsigned int dataBufferOffset;
-    unsigned int packetLength = 0;
+	// bool success;
+	int n, earliest = MAX_OVERLAP;
+	unsigned int minFrame = 4294967295;
+	unsigned int dataBufferOffset;
+	unsigned int packetLength = 0;
 
-    //Getting earliest transfer number.
-    for (n=0; n<NUM_FUTURE_CTX; n++){
-        if(allEndpointsComplete(n)){
-            if(isoCtx[0][n]->StartFrame < minFrame){
-                minFrame = isoCtx[0][n]->StartFrame;
-                earliest = n;
-            }
-        }
-    }
+	// Getting earliest transfer number.
+	for (n = 0; n < NUM_FUTURE_CTX; n++)
+	{
+		if (allEndpointsComplete(n))
+		{
+			if (isoCtx[0][n]->StartFrame < minFrame)
+			{
+				minFrame = isoCtx[0][n]->StartFrame;
+				earliest = n;
+			}
+		}
+	}
 
-    //qDebug() << n << "is the earliest!";
+	// qDebug() << n << "is the earliest!";
 
-    if (earliest == MAX_OVERLAP){
-        return;
-    }
+	if (earliest == MAX_OVERLAP)
+	{
+		return;
+	}
+	UINT ep0frame = isoCtx[0][earliest]->StartFrame;
+	UINT epkframe = isoCtx[NUM_ISO_ENDPOINTS - 1][earliest]->StartFrame;
+	UINT framePhaseError = epkframe - ep0frame;
+	UINT frames[NUM_ISO_ENDPOINTS] = {};
+	static unsigned int alignedStreak = 0;
+	if (framePhaseError == 0)
+	{
+		alignedStreak++;
+	}
+	else
+	{
+		alignedStreak = 0;
+	}
+	bool publishAlignedBuffer = (alignedStreak >= WINUSB_PHASE_RESYNC_STREAK);
 
-    //Copy the tranfer data into buffer
-    for(int i=0;i<isoCtx[0][earliest]->NumberOfPackets;i++){
-        for(unsigned char k=0; k<NUM_ISO_ENDPOINTS;k++){
-            dataBufferOffset = isoCtx[k][earliest]->IsoPackets[i].Offset;
-            memcpy(&(outBuffers[currentWriteBuffer][packetLength]), &dataBuffer[k][earliest][dataBufferOffset], isoCtx[k][earliest]->IsoPackets[i].Length);
-            packetLength += isoCtx[k][earliest]->IsoPackets[i].Length;
-        }
-    }
+#ifdef WINUSB_PHASE_DIAGNOSTICS
+	// DIAGNOSTIC CODE
+	static bool lastPatternValid = false;
+	static bool lastPatternHadError = false;
+	static UINT lastFrames[NUM_ISO_ENDPOINTS] = {};
+	static long long lastDeltas[NUM_ISO_ENDPOINTS] = {};
+	static unsigned int repeatedPatternCount = 0;
 
-    //Get the data for isoRead() ready and swap buffers
-    bufferLengths[currentWriteBuffer] = packetLength;
-    currentWriteBuffer = !currentWriteBuffer;
+	long long deltas[NUM_ISO_ENDPOINTS] = {};
+	bool patternChanged
+	    = !lastPatternValid || (lastPatternHadError != (framePhaseError != 0));
 
+	for (unsigned char k = 0; k < NUM_ISO_ENDPOINTS; ++k)
+	{
+		frames[k] = isoCtx[k][earliest]->StartFrame;
+		deltas[k] = static_cast<long long>(frames[k]) - static_cast<long long>(ep0frame);
+		if (lastPatternValid && (frames[k] != lastFrames[k] || deltas[k] != lastDeltas[k]))
+		{
+			patternChanged = true;
+		}
+	}
 
-    //Check for incorrect setup and kill if that were the case.
-    UINT ep0frame = isoCtx[0][earliest]->StartFrame;
-    UINT epkframe = isoCtx[NUM_ISO_ENDPOINTS-1][earliest]->StartFrame;
-    UINT framePhaseError = epkframe - ep0frame;
-    if(framePhaseError){
-        #ifndef WINDOWS_32_BIT
-        qDebug("Frame phase error of %d", framePhaseError);
-        #endif
-    }
+	if (framePhaseError && patternChanged)
+	{
+		if (lastPatternValid && lastPatternHadError && repeatedPatternCount)
+		{
+			qDebug("Frame phase pattern repeated %u additional times", repeatedPatternCount);
+		}
+		qDebug("Frame phase mismatch: ctx=%d packets=%d ep0=%u epLast=%u phase=%u", earliest,
+		    isoCtx[0][earliest]->NumberOfPackets, ep0frame, epkframe, framePhaseError);
+		qDebug("  StartFrame: ep0=%u ep1=%u ep2=%u ep3=%u ep4=%u ep5=%u", frames[0],
+		    frames[1], frames[2], frames[3], frames[4], frames[5]);
+		qDebug("  Delta from ep0: ep0=%lld ep1=%lld ep2=%lld ep3=%lld ep4=%lld ep5=%lld",
+		    deltas[0], deltas[1], deltas[2], deltas[3], deltas[4], deltas[5]);
+	}
+	else if (!framePhaseError && lastPatternValid && lastPatternHadError)
+	{
+		if (repeatedPatternCount)
+		{
+			qDebug("Frame phase pattern repeated %u additional times before resync",
+			    repeatedPatternCount);
+		}
+		qDebug("Frame phase resynchronized: ctx=%d packets=%d ep0=%u", earliest,
+		    isoCtx[0][earliest]->NumberOfPackets, ep0frame);
+	}
+	else if (framePhaseError)
+	{
+		repeatedPatternCount++;
+	}
 
+	for (unsigned char k = 0; k < NUM_ISO_ENDPOINTS; ++k)
+	{
+		lastFrames[k] = frames[k];
+		lastDeltas[k] = deltas[k];
+	}
+	lastPatternValid = true;
+	lastPatternHadError = (framePhaseError != 0);
+	if (!framePhaseError || patternChanged)
+		repeatedPatternCount = 0;
+// END DIAGNOSTIC CODE
+#endif
+	if (publishAlignedBuffer)
+	{
+		// Copy the tranfer data into buffer
+		for (int i = 0; i < isoCtx[0][earliest]->NumberOfPackets; i++)
+		{
+			for (unsigned char k = 0; k < NUM_ISO_ENDPOINTS; k++)
+			{
+				dataBufferOffset = isoCtx[k][earliest]->IsoPackets[i].Offset;
+				memcpy(&(outBuffers[currentWriteBuffer][packetLength]),
+				    &dataBuffer[k][earliest][dataBufferOffset],
+				    isoCtx[k][earliest]->IsoPackets[i].Length);
+				packetLength += isoCtx[k][earliest]->IsoPackets[i].Length;
+			}
+		}
 
-    //Setup transfer for resubmission
-    for(unsigned char k=0; k<NUM_ISO_ENDPOINTS; k++){
-        if(shutdownRequested){
-            continue;
-        }
-        //Apparently reusing before resubmitting is a bad idea???
+		// Get the data for isoRead() ready and swap buffers
+		bufferLengths[currentWriteBuffer] = packetLength;
+		currentWriteBuffer = !currentWriteBuffer;
+	}
 
-        /*UINT oldStart = isoCtx[k][earliest]->StartFrame;
-        success = IsoK_ReUse(isoCtx[k][earliest]);
-        if(!success){
-            DWORD errorCode = GetLastError();
-            qDebug() << "IsoK_Init failed with error code" << errorCode;
-            qDebug() << "n =" << n;
-            return;
-        }
-        isoCtx[k][earliest]->StartFrame = 0;
+	// Check for incorrect setup and kill if that were the case.
 
-        success = OvlK_ReUse(ovlkHandle[k][earliest]);
-        if(!success){
-            DWORD errorCode = GetLastError();
-            qDebug() << "OvlK_ReUse failed with error code" << errorCode;
-            qDebug() << "n =" << n;
-            return;
-        }*/
-        //Resubmit the transfer
-        success = UsbK_IsoReadPipe(handle, pipeID[k], dataBuffer[k][earliest], sizeof(dataBuffer[k][earliest]), (LPOVERLAPPED) ovlkHandle[k][earliest], isoCtx[k][earliest]);
-    }
-    //qDebug() << "Resubmitted Ctx #"<< earliest;
-    //Signal to isoDriver that it can draw a new frame.
-    upTick();
-    return;
+	if (framePhaseError)
+	{
+#ifndef WINDOWS_32_BIT
+		qDebug("Frame phase error of %d", framePhaseError);
+#endif
+	}
+
+	// Setup transfer for resubmission
+	for (unsigned char k = 0; k < NUM_ISO_ENDPOINTS; k++)
+	{
+		if (shutdownRequested)
+		{
+			continue;
+		}
+		// Apparently reusing before resubmitting is a bad idea???
+
+		/*UINT oldStart = isoCtx[k][earliest]->StartFrame;
+		success = IsoK_ReUse(isoCtx[k][earliest]);
+		if(!success){
+		    DWORD errorCode = GetLastError();
+		    qDebug() << "IsoK_Init failed with error code" << errorCode;
+		    qDebug() << "n =" << n;
+		    return;
+		}
+		isoCtx[k][earliest]->StartFrame = 0;
+
+		success = OvlK_ReUse(ovlkHandle[k][earliest]);
+		if(!success){
+		    DWORD errorCode = GetLastError();
+		    qDebug() << "OvlK_ReUse failed with error code" << errorCode;
+		    qDebug() << "n =" << n;
+		    return;
+		}
+		// Resubmit the transfer
+		success = UsbK_IsoReadPipe(handle, pipeID[k], dataBuffer[k][earliest],
+		    sizeof(dataBuffer[k][earliest]), (LPOVERLAPPED)ovlkHandle[k][earliest],
+		    isoCtx[k][earliest]);
+		    */
+		if (!UsbK_IsoReadPipe(handle, pipeID[k], dataBuffer[k][earliest],
+		        sizeof(dataBuffer[k][earliest]), (LPOVERLAPPED)ovlkHandle[k][earliest],
+		        isoCtx[k][earliest]))
+		{
+			DWORD errorCode = GetLastError();
+			qDebug() << "UsbK_IsoReadPipe failed with error code" << errorCode;
+		}
+	}
+	// qDebug() << "Resubmitted Ctx #"<< earliest;
+	// Signal to isoDriver that it can draw a new frame.
+	if (publishAlignedBuffer)
+	{
+		upTick();
+	}
+	return;
 }
 
-char *winUsbDriver::isoRead(unsigned int *newLength){
-    //This will be called almost immediately after the upTick() signal is sent.  Make sure bufferLengths[] abd outBuffers[] are ready!
-    *(newLength) = bufferLengths[!currentWriteBuffer];
-    return (char*) outBuffers[(unsigned char) !currentWriteBuffer];
+char* winUsbDriver::isoRead(unsigned int* newLength)
+{
+	// This will be called almost immediately after the upTick() signal is sent.  Make
+	// sure bufferLengths[] abd outBuffers[] are ready!
+	*(newLength) = bufferLengths[!currentWriteBuffer];
+	return (char*)outBuffers[(unsigned char)!currentWriteBuffer];
 }
 
-bool winUsbDriver::allEndpointsComplete(int n){
-    //Just tells you if transfers have completed on _all_ iso endpoints for a given value of n.
-    for (unsigned char k=0;k<NUM_ISO_ENDPOINTS;k++){
-        if(!OvlK_IsComplete(ovlkHandle[k][n])){
-            return false;
-        }
-    }
-    return true;
+bool winUsbDriver::allEndpointsComplete(int n)
+{
+	// Just tells you if transfers have completed on _all_ iso endpoints for a given value of n.
+	for (unsigned char k = 0; k < NUM_ISO_ENDPOINTS; k++)
+	{
+		if (!OvlK_IsComplete(ovlkHandle[k][n]))
+		{
+			return false;
+		}
+	}
+	return true;
 }
 
-void winUsbDriver::recoveryTick(){
-    //Blind AVR Debug (Doesn't Print)
-    usbSendControl(0xc0, 0xa0, 0, 0, sizeof(unified_debug), NULL);
-    return;
+void winUsbDriver::recoveryTick()
+{
+	// Blind AVR Debug (Doesn't Print)
+	usbSendControl(0xc0, 0xa0, 0, 0, sizeof(unified_debug), NULL);
+	return;
 }
 
-void winUsbDriver::shutdownProcedure(){
-    if(shutdownRequested){
-        return;
-    }
-    shutdownRequested = true;
+void winUsbDriver::shutdownProcedure()
+{
+	if (shutdownRequested)
+	{
+		return;
+	}
+	shutdownRequested = true;
 
-    // 1) Stop timers so no new work is scheduled.
-    // 2) Abort + flush pipes to force outstanding overlapped requests to complete.
-    // 3) Poll for completion with a timeout.
-    // 4) Emit shutdownComplete once it's safe for MainWindow to delete this driver.
-    qDebug() << "winUsbDriver::shutdownProcedure begin";
+	// 1) Stop timers so no new work is scheduled.
+	// 2) Abort + flush pipes to force outstanding overlapped requests to complete.
+	// 3) Poll for completion with a timeout.
+	// 4) Emit shutdownComplete once it's safe for MainWindow to delete this driver.
+	qDebug() << "winUsbDriver::shutdownProcedure begin";
 
-    if(isoTimer){
-        isoTimer->stop();
-    }
-    if(recoveryTimer){
-        recoveryTimer->stop();
-    }
+	if (isoTimer)
+	{
+		isoTimer->stop();
+	}
+	if (recoveryTimer)
+	{
+		recoveryTimer->stop();
+	}
 
-    if(handle){
-        for (unsigned char k=0; k<NUM_ISO_ENDPOINTS; k++){
-            UsbK_AbortPipe(handle, pipeID[k]);
-            UsbK_FlushPipe(handle, pipeID[k]);
-        }
-    }
+	if (handle)
+	{
+		for (unsigned char k = 0; k < NUM_ISO_ENDPOINTS; k++)
+		{
+			UsbK_AbortPipe(handle, pipeID[k]);
+			UsbK_FlushPipe(handle, pipeID[k]);
+		}
+	}
 
-    // Drain outstanding overlapped requests.
-    QElapsedTimer drainTimer;
-    drainTimer.start();
-    constexpr qint64 kDrainTimeoutMs = 3000;
-    bool allComplete = false;
-    while(!allComplete && (drainTimer.elapsed() < kDrainTimeoutMs)){
-        allComplete = true;
-        for (unsigned char k=0; k<NUM_ISO_ENDPOINTS; k++){
-            for(int n=0; n<NUM_FUTURE_CTX; n++){
-                if(ovlkHandle[k][n] && !OvlK_IsComplete(ovlkHandle[k][n])){
-                    allComplete = false;
-                    break;
-                }
-            }
-            if(!allComplete){
-                break;
-            }
-        }
-        if(!allComplete){
-            QThread::msleep(10);
-        }
-    }
+	// Drain outstanding overlapped requests.
+	QElapsedTimer drainTimer;
+	drainTimer.start();
+	constexpr qint64 kDrainTimeoutMs = 3000;
+	bool allComplete = false;
+	while (!allComplete && (drainTimer.elapsed() < kDrainTimeoutMs))
+	{
+		allComplete = true;
+		for (unsigned char k = 0; k < NUM_ISO_ENDPOINTS; k++)
+		{
+			for (int n = 0; n < NUM_FUTURE_CTX; n++)
+			{
+				if (ovlkHandle[k][n] && !OvlK_IsComplete(ovlkHandle[k][n]))
+				{
+					allComplete = false;
+					break;
+				}
+			}
+			if (!allComplete)
+			{
+				break;
+			}
+		}
+		if (!allComplete)
+		{
+			QThread::msleep(10);
+		}
+	}
 
-    if(!allComplete){
-        qDebug() << "winUsbDriver::shutdownProcedure timed out waiting for overlapped completion";
-    }
+	if (!allComplete)
+	{
+		qDebug() << "winUsbDriver::shutdownProcedure timed out waiting for overlapped "
+		            "completion";
+	}
 
-    if(!shutdownCompleteSent){
-        shutdownCompleteSent = true;
-        connected = false;
-        connectedStatus(false);
-        emit shutdownComplete();
-    }
-    return;
+	if (!shutdownCompleteSent)
+	{
+		shutdownCompleteSent = true;
+		connected = false;
+		connectedStatus(false);
+		emit shutdownComplete();
+	}
+	return;
 }
 
-int winUsbDriver::flashFirmware(void){
-    qDebug() << "\n\n\n\n\n\n\n\nFIRMWARE MISMATCH!!!!  FLASHING....\n\n\n\n\n\n\n";
+int winUsbDriver::flashFirmware(void)
+{
+	qDebug() << "\n\n\n\n\n\n\n\nFIRMWARE MISMATCH!!!!  FLASHING....\n\n\n\n\n\n\n";
 
-    signalFirmwareFlash();
-    QApplication::processEvents();
+	signalFirmwareFlash();
+	QApplication::processEvents();
 
-    //Go to bootloader mode
-    bootloaderJump();
+	// Go to bootloader mode
+	bootloaderJump();
 
-    //Get location of firmware file
-    QString firmware_path = QCoreApplication::applicationDirPath();
-    firmware_path.append(QString::asprintf("/firmware/labrafirm_%04x_%02x.hex", EXPECTED_FIRMWARE_VERSION, DEFINED_EXPECTED_VARIANT));
-    qDebug() << "FLASHING " << firmware_path;
+	// Get location of firmware file
+	QString firmware_path = QCoreApplication::applicationDirPath();
+	firmware_path.append(QString::asprintf("/firmware/labrafirm_%04x_%02x.hex",
+	    EXPECTED_FIRMWARE_VERSION, DEFINED_EXPECTED_VARIANT));
+	qDebug() << "FLASHING " << firmware_path;
 
-    //Set up interface to dfuprog
-    QString dfuprog_path = QCoreApplication::applicationDirPath();
-    dfuprog_path.append("/firmware/dfu-programmer");
-    QProcess dfu_exe;
-    QStringList args_stage1;
-    args_stage1 << "atxmega32a4u" << "erase" << "--force";
-    QStringList args_stage2;
-    args_stage2 << "atxmega32a4u" << "flash" << firmware_path;
-    QStringList args_stage3;
-    args_stage3 << "atxmega32a4u" << "launch";
-    QStringList args_stage4;
-    args_stage4 << "atxmega32a4u" << "launch";
+	// Set up interface to dfuprog
+	QString dfuprog_path = QCoreApplication::applicationDirPath();
+	dfuprog_path.append("/firmware/dfu-programmer");
+	QProcess dfu_exe;
+	QStringList args_stage1;
+	args_stage1 << "atxmega32a4u" << "erase" << "--force";
+	QStringList args_stage2;
+	args_stage2 << "atxmega32a4u" << "flash" << firmware_path;
+	QStringList args_stage3;
+	args_stage3 << "atxmega32a4u" << "launch";
+	QStringList args_stage4;
+	args_stage4 << "atxmega32a4u" << "launch";
 
-    //Run stage 1, until there's a success
-    do {
-        QThread::msleep(200);
-        dfu_exe.start(dfuprog_path, args_stage1);
-        dfu_exe.waitForFinished(-1);
-        qDebug() << "stdio_stage1" << dfu_exe.readAllStandardOutput();
-        qDebug() << "sterr_stage1" << dfu_exe.readAllStandardError();
-        qDebug() << "EXIT_CODE stage1" << dfu_exe.exitCode();
-        /*if(dfu_exe.exitCode()){
-            return dfu_exe.exitCode()+100;
-        }*/
-        QApplication::processEvents();
-    } while (dfu_exe.exitCode());
+	// Run stage 1, until there's a success
+	do
+	{
+		QThread::msleep(200);
+		dfu_exe.start(dfuprog_path, args_stage1);
+		dfu_exe.waitForFinished(-1);
+		qDebug() << "stdio_stage1" << dfu_exe.readAllStandardOutput();
+		qDebug() << "sterr_stage1" << dfu_exe.readAllStandardError();
+		qDebug() << "EXIT_CODE stage1" << dfu_exe.exitCode();
+		/*if(dfu_exe.exitCode()){
+		    return dfu_exe.exitCode()+100;
+		}*/
+		QApplication::processEvents();
+	} while (dfu_exe.exitCode());
 
-    //Run stage 2
-    dfu_exe.start(dfuprog_path, args_stage2);
-    dfu_exe.waitForFinished(-1);
-    qDebug() << "stdio_stage2" << dfu_exe.readAllStandardOutput();
-    qDebug() << "sterr_stage2" << dfu_exe.readAllStandardError();
-    qDebug() << "EXIT_CODE stage2" << dfu_exe.exitCode();
-    if (dfu_exe.exitCode()) {
-        return dfu_exe.exitCode()+200;
-    }
+	// Run stage 2
+	dfu_exe.start(dfuprog_path, args_stage2);
+	dfu_exe.waitForFinished(-1);
+	qDebug() << "stdio_stage2" << dfu_exe.readAllStandardOutput();
+	qDebug() << "sterr_stage2" << dfu_exe.readAllStandardError();
+	qDebug() << "EXIT_CODE stage2" << dfu_exe.exitCode();
+	if (dfu_exe.exitCode())
+	{
+		return dfu_exe.exitCode() + 200;
+	}
 
-    //Run stage 3
-    dfu_exe.start(dfuprog_path, args_stage3);
-    dfu_exe.waitForFinished(-1);
-    qDebug() << "stdio_stage3" << dfu_exe.readAllStandardOutput();
-    qDebug() << "sterr_stage3" << dfu_exe.readAllStandardError();
-    qDebug() << "EXIT_CODE stage3" << dfu_exe.exitCode();
-    if (dfu_exe.exitCode()) {
-        return dfu_exe.exitCode()+300;
-    }
+	// Run stage 3
+	dfu_exe.start(dfuprog_path, args_stage3);
+	dfu_exe.waitForFinished(-1);
+	qDebug() << "stdio_stage3" << dfu_exe.readAllStandardOutput();
+	qDebug() << "sterr_stage3" << dfu_exe.readAllStandardError();
+	qDebug() << "EXIT_CODE stage3" << dfu_exe.exitCode();
+	if (dfu_exe.exitCode())
+	{
+		return dfu_exe.exitCode() + 300;
+	}
 
-    //Run stage 4 - double launch to clear the eeprom flag from bootloaderJump.
-    //Connect back to labrador
-    do {
-        QThread::msleep(200);
-        dfu_exe.start(dfuprog_path, args_stage4);
-        dfu_exe.waitForFinished(-1);
-        qDebug() << "stdio_stage4" << dfu_exe.readAllStandardOutput();
-        qDebug() << "sterr_stage4" << dfu_exe.readAllStandardError();
-        qDebug() << "EXIT_CODE stage4" << dfu_exe.exitCode();
-        QApplication::processEvents();
-    } while (dfu_exe.exitCode());
+	// Run stage 4 - double launch to clear the eeprom flag from bootloaderJump.
+	// Connect back to labrador
+	do
+	{
+		QThread::msleep(200);
+		dfu_exe.start(dfuprog_path, args_stage4);
+		dfu_exe.waitForFinished(-1);
+		qDebug() << "stdio_stage4" << dfu_exe.readAllStandardOutput();
+		qDebug() << "sterr_stage4" << dfu_exe.readAllStandardError();
+		qDebug() << "EXIT_CODE stage4" << dfu_exe.exitCode();
+		QApplication::processEvents();
+	} while (dfu_exe.exitCode());
 
-    return 0;
+	return 0;
 }
 
-void winUsbDriver::manualFirmwareRecovery(void){
-    //Get location of firmware file
-    QString firmware_path = QCoreApplication::applicationDirPath();
-    firmware_path.append(QString::asprintf("/firmware/labrafirm_%04x_%02x.hex", EXPECTED_FIRMWARE_VERSION, DEFINED_EXPECTED_VARIANT));
+void winUsbDriver::manualFirmwareRecovery(void)
+{
+	// Get location of firmware file
+	QString firmware_path = QCoreApplication::applicationDirPath();
+	firmware_path.append(QString::asprintf("/firmware/labrafirm_%04x_%02x.hex",
+	    EXPECTED_FIRMWARE_VERSION, DEFINED_EXPECTED_VARIANT));
 
-    //Set up interface to dfuprog
-    QString dfuprog_path = QCoreApplication::applicationDirPath();
-    dfuprog_path.append("/firmware/dfu-programmer");
-    QProcess dfu_exe;
-    QStringList leaveBootloaderCommand;
-    leaveBootloaderCommand << "atxmega32a4u" << "launch";
-    QStringList eraseCommand;
-    eraseCommand << "atxmega32a4u" << "erase" << "--force";
-    QStringList flashCommand;
-    flashCommand << "atxmega32a4u" << "flash" << firmware_path;
+	// Set up interface to dfuprog
+	QString dfuprog_path = QCoreApplication::applicationDirPath();
+	dfuprog_path.append("/firmware/dfu-programmer");
+	QProcess dfu_exe;
+	QStringList leaveBootloaderCommand;
+	leaveBootloaderCommand << "atxmega32a4u" << "launch";
+	QStringList eraseCommand;
+	eraseCommand << "atxmega32a4u" << "erase" << "--force";
+	QStringList flashCommand;
+	flashCommand << "atxmega32a4u" << "flash" << firmware_path;
 
-    //Intro
-    QMessageBox manualFirmwareMessages;
-    manualFirmwareMessages.setText("Welcome to the firmware recovery wizard.\nThis tool will attempt various steps to troubleshoot a board with connection issues.\n\nPress OK to continue.");
-    manualFirmwareMessages.exec();
+	// Intro
+	QMessageBox manualFirmwareMessages;
+	manualFirmwareMessages.setText(
+	    "Welcome to the firmware recovery wizard.\nThis tool will attempt various steps "
+	    "to troubleshoot a board with connection issues.\n\nPress OK to continue.");
+	manualFirmwareMessages.exec();
 
-    //Hello, this is IT, can you try turning it off and on again?
-    manualFirmwareMessages.setText("Before continuing, please disconnect and reconnect your Labrador board, then wait 10 seconds.\n\nAlso ensure that there are no other instances of the Labrador software running on this machine.");
-    manualFirmwareMessages.exec();
-    manualFirmwareMessages.setStandardButtons(QMessageBox::Yes|QMessageBox::No);
-    manualFirmwareMessages.setText("Did that fix things?");
-    int messageBoxReturn = manualFirmwareMessages.exec();
-    manualFirmwareMessages.setStandardButtons(QMessageBox::Ok);
-    if (messageBoxReturn == QMessageBox::Yes) {
-        manualFirmwareMessages.setText("Awesome!  Have fun!");
-        manualFirmwareMessages.exec();
-        return;
-    }
+	// Hello, this is IT, can you try turning it off and on again?
+	manualFirmwareMessages.setText(
+	    "Before continuing, please disconnect and reconnect your Labrador board, then "
+	    "wait 10 seconds.\n\nAlso ensure that there are no other instances of the "
+	    "Labrador software running on this machine.");
+	manualFirmwareMessages.exec();
+	manualFirmwareMessages.setStandardButtons(QMessageBox::Yes | QMessageBox::No);
+	manualFirmwareMessages.setText("Did that fix things?");
+	int messageBoxReturn = manualFirmwareMessages.exec();
+	manualFirmwareMessages.setStandardButtons(QMessageBox::Ok);
+	if (messageBoxReturn == QMessageBox::Yes)
+	{
+		manualFirmwareMessages.setText("Awesome!  Have fun!");
+		manualFirmwareMessages.exec();
+		return;
+	}
 
-    //Real troubleshooting begins here.....
+	// Real troubleshooting begins here.....
 
-    //USB Problems.
-    if (connected) {
-        manualFirmwareMessages.setText("It seems like your board is already connected and configured correctly.\n\nIf your board is not functioning correctly, this indicates that there is an issue with the USB driver.\n\nLet's go through some manual troubleshooting steps.");
-        manualFirmwareMessages.exec();
-        manualFirmwareMessages.setText("There are two main possibilities:\n\n - Your USB Controller does not support Isochronous mode at USB 2.0 FS\n - Another device is competing with Labrador for bandwidth.");
-        manualFirmwareMessages.exec();
-        manualFirmwareMessages.setText("If Labrador is connected to a USB 2.0 port, unplug it and connect it to a USB3 port.\n\nIf it's in a USB3 port, try connecting it to a USB 2.0 port.\n\nIf you have other USB devices, such as a keyboard and mouse, ensure they're connected to a port of a different type than Labrador (e.g., if your mouse and keyboard are in USB 2.0 ports, try putting Labrador in a USB 3.0 port).\n\nIf you're not sure which is which, USB3 ports are usually blue on the inside.");
-        manualFirmwareMessages.exec();
-        manualFirmwareMessages.setText("If you have a spare USB hub, connect Labrador (and only Labrador) to the hub.\n\nThis will usually result in a huge reduction in bandwidth required to communicate with Labrador, since a Hi-Speed hub reads from Labrador at 12MHz, but transmits upstream to the host at 480MHz.\n\n(If the host is connected to Labrador directly, it is slowed down to 12MHz!) ");
-        manualFirmwareMessages.exec();
-        manualFirmwareMessages.setText("If it's still not working, please disconnect all USB devices from your machine, then one by one, insert Labrador into each USB port on your machine until it starts working.");
-        manualFirmwareMessages.exec();
-        manualFirmwareMessages.setText("If that doesn't fix it, please open an issue on github.com/espotek-org/labrador, or contact me at admin@espotek.com.");
-        manualFirmwareMessages.exec();
-        return;
-    } else {
-        qDebug() << "Attempting to leave bootloader!";
-        dfu_exe.start(dfuprog_path, leaveBootloaderCommand);
-        dfu_exe.waitForFinished(-1);
-        manualFirmwareMessages.setText("No Labrador board could be detected.\n\nIt's possible that you're stuck in booloader mode.\n\nI've attempted to launch the firmware manually.");
-        manualFirmwareMessages.exec();
-        if (dfu_exe.exitCode()) {
-            qDebug() << "Exit code =" << dfu_exe.exitCode();
-            manualFirmwareMessages.setText("Command failed.  This usually means that no device is detected.\n\nPlease Ensure that the cable you're using can carry data (for example, by using it to transfer data to your phone).\n\nSome cables are for charging only, and not physically contain data lines.\n\nAlso note that the red light on the Labrador board is a power indicator for the PSU output pins.\nIt will turn on even if no data lines are present.");
-            manualFirmwareMessages.exec();
-            return;
-        }
-        //Firmware launch failed, but bootloader preset
-        if (!connected) {
-            qDebug() << "Attempting to erase!";
-            dfu_exe.start(dfuprog_path, eraseCommand);
-            dfu_exe.waitForFinished(-1);
-            int exit_code = dfu_exe.exitCode();
+	// USB Problems.
+	if (connected)
+	{
+		manualFirmwareMessages.setText(
+		    "It seems like your board is already connected and configured "
+		    "correctly.\n\nIf your board is not functioning correctly, this indicates "
+		    "that there is an issue with the USB driver.\n\nLet's go through some manual "
+		    "troubleshooting steps.");
+		manualFirmwareMessages.exec();
+		manualFirmwareMessages.setText(
+		    "There are two main possibilities:\n\n - Your USB Controller does not "
+		    "support Isochronous mode at USB 2.0 FS\n - Another device is competing with "
+		    "Labrador for bandwidth.");
+		manualFirmwareMessages.exec();
+		manualFirmwareMessages.setText(
+		    "If Labrador is connected to a USB 2.0 port, unplug it and connect it to a "
+		    "USB3 port.\n\nIf it's in a USB3 port, try connecting it to a USB 2.0 "
+		    "port.\n\nIf you have other USB devices, such as a keyboard and mouse, "
+		    "ensure they're connected to a port of a different type than Labrador (e.g., "
+		    "if your mouse and keyboard are in USB 2.0 ports, try putting Labrador in a "
+		    "USB 3.0 port).\n\nIf you're not sure which is which, USB3 ports are usually "
+		    "blue on the inside.");
+		manualFirmwareMessages.exec();
+		manualFirmwareMessages.setText(
+		    "If you have a spare USB hub, connect Labrador (and only Labrador) to the "
+		    "hub.\n\nThis will usually result in a huge reduction in bandwidth required "
+		    "to communicate with Labrador, since a Hi-Speed hub reads from Labrador at "
+		    "12MHz, but transmits upstream to the host at 480MHz.\n\n(If the host is "
+		    "connected to Labrador directly, it is slowed down to 12MHz!) ");
+		manualFirmwareMessages.exec();
+		manualFirmwareMessages.setText(
+		    "If it's still not working, please disconnect all USB devices from your "
+		    "machine, then one by one, insert Labrador into each USB port on your "
+		    "machine until it starts working.");
+		manualFirmwareMessages.exec();
+		manualFirmwareMessages.setText(
+		    "If that doesn't fix it, please open an issue on "
+		    "github.com/espotek-org/labrador, or contact me at admin@espotek.com.");
+		manualFirmwareMessages.exec();
+		return;
+	}
+	else
+	{
+		qDebug() << "Attempting to leave bootloader!";
+		dfu_exe.start(dfuprog_path, leaveBootloaderCommand);
+		dfu_exe.waitForFinished(-1);
+		manualFirmwareMessages.setText(
+		    "No Labrador board could be detected.\n\nIt's possible that you're stuck in "
+		    "booloader mode.\n\nI've attempted to launch the firmware manually.");
+		manualFirmwareMessages.exec();
+		if (dfu_exe.exitCode())
+		{
+			qDebug() << "Exit code =" << dfu_exe.exitCode();
+			manualFirmwareMessages.setText(
+			    "Command failed.  This usually means that no device is "
+			    "detected.\n\nPlease Ensure that the cable you're using can carry data "
+			    "(for example, by using it to transfer data to your phone).\n\nSome "
+			    "cables are for charging only, and not physically contain data "
+			    "lines.\n\nAlso note that the red light on the Labrador board is a power "
+			    "indicator for the PSU output pins.\nIt will turn on even if no data "
+			    "lines are present.");
+			manualFirmwareMessages.exec();
+			return;
+		}
+		// Firmware launch failed, but bootloader preset
+		if (!connected)
+		{
+			qDebug() << "Attempting to erase!";
+			dfu_exe.start(dfuprog_path, eraseCommand);
+			dfu_exe.waitForFinished(-1);
+			int exit_code = dfu_exe.exitCode();
 
-            qDebug() << "Exit code for erase =" << dfu_exe.exitCode();
+			qDebug() << "Exit code for erase =" << dfu_exe.exitCode();
 
-            qDebug() << "Attempting to flash file" << firmware_path;
-            dfu_exe.start(dfuprog_path, flashCommand);
-            dfu_exe.waitForFinished(-1);
-            exit_code += dfu_exe.exitCode();
+			qDebug() << "Attempting to flash file" << firmware_path;
+			dfu_exe.start(dfuprog_path, flashCommand);
+			dfu_exe.waitForFinished(-1);
+			exit_code += dfu_exe.exitCode();
 
-            qDebug() << "Exit code for flash =" << dfu_exe.exitCode();
+			qDebug() << "Exit code for flash =" << dfu_exe.exitCode();
 
-            manualFirmwareMessages.setText("The bootloader is present, but firmware launch failed.  I've attempted to reprogram it.");
-            manualFirmwareMessages.exec();
+			manualFirmwareMessages.setText(
+			    "The bootloader is present, but firmware launch failed.  I've attempted "
+			    "to reprogram it.");
+			manualFirmwareMessages.exec();
 
-            if (!exit_code) { //Reprogramming was successful, but board is still in bootloader mode.
-                dfu_exe.start(dfuprog_path, leaveBootloaderCommand);
-                dfu_exe.waitForFinished(-1);
-                manualFirmwareMessages.setText("Reprogramming was successful!  Attempting to launch the board.\n\nIf it does not start working immediately, please wait 10 seconds and then reconnect the board.");
-                manualFirmwareMessages.exec();
-            } else { //Programming failed.
-                manualFirmwareMessages.setText("Automatic Reprogramming failed.\n\nPlease try again, making sure you read every message carefully and slowly before pushing 'OK'.\nWindows can take several seconds to detect USB events, so this is sometimes necessary.\n\nIf it's still not programming properly, please contact me at admin@espotek.com for further support.");
-                manualFirmwareMessages.exec();
-            }
+			if (!exit_code)
+			{ // Reprogramming was successful, but board is still in bootloader mode.
+				dfu_exe.start(dfuprog_path, leaveBootloaderCommand);
+				dfu_exe.waitForFinished(-1);
+				manualFirmwareMessages.setText(
+				    "Reprogramming was successful!  Attempting to launch the "
+				    "board.\n\nIf it does not start working immediately, please wait 10 "
+				    "seconds and then reconnect the board.");
+				manualFirmwareMessages.exec();
+			}
+			else
+			{ // Programming failed.
+				manualFirmwareMessages.setText(
+				    "Automatic Reprogramming failed.\n\nPlease try again, making sure "
+				    "you read every message carefully and slowly before pushing "
+				    "'OK'.\nWindows can take several seconds to detect USB events, so "
+				    "this is sometimes necessary.\n\nIf it's still not programming "
+				    "properly, please contact me at admin@espotek.com for further "
+				    "support.");
+				manualFirmwareMessages.exec();
+			}
 
-            return;
-        }
-    }
+			return;
+		}
+	}
 }
